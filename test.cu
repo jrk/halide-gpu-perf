@@ -1,135 +1,173 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <assert.h>
+// #include <HalideRuntimeCuda.h>
+#include <HalideBuffer.h>
 
-const int kernel_radius = 3;
+const int kernel_radius = 9;
 const int kernel_area = (kernel_radius*2+1)*(kernel_radius*2+1);
+const int width = 6400,
+          height = 4800;
+
+#ifdef _MSC_VER
+#define ALWAYS_INLINE __forceinline
+#else
+#define ALWAYS_INLINE __attribute__((always_inline))
+#endif
 
 template <typename T>
-struct buf {
-
-    T *host;
-    T *dev;
-    int32_t base[2];
-    int32_t extent[2];
-    int32_t stride[2];
-    int32_t size;
-
-    buf(int width, int height) {
-        base[0] = base[1] = 0;
-        stride[0] = 1;
-        stride[1] = width;
-        extent[0] = width;
-        extent[1] = height;
-        
-        size = width*height;
-        host = new T[size];
-		fprintf(stderr, "Allocated (%dx%d)->host at 0x%lx\n", width, height, (size_t)host);
-
-        cudaError_t err = cudaSuccess;
-        err = cudaMalloc((void **)&dev, size*sizeof(T));
-		
-        if (err != cudaSuccess) {
-            fprintf(stderr, "Failed to allocate device buffer (error code %s)!\n",
-							cudaGetErrorString(err));
-            exit(-1);
-        }
-    }
-
-    buf() {}
-
-    void free() {
-        delete host;
-        cudaFree(dev);
-    }
-
-    __host__ __device__ inline T& operator()(int x, int y) {
-        assert(x >= base[0] && x < extent[0] && y >= base[1] && y < extent[1]);
-#if defined(__CUDA_ARCH__)
-        return dev[(x-base[0])*stride[0] + (y-base[1])*stride[1]];
-#else
-        return host[(x-base[0])*stride[0] + (y-base[1])*stride[1]];
-#endif
-    }
-    void h_to_d() {
-        cudaMemcpy((void*)dev, (void*)host, size*sizeof(T), cudaMemcpyHostToDevice);
-    }
-    void d_to_h() {
-        cudaMemcpy((void*)host, (void*)dev, size*sizeof(T), cudaMemcpyDeviceToHost);
-    }
-
-    template<typename Fn>
-    void for_each(Fn f) {
-        for (int y = base[1]; y < base[1]+extent[1]; y++) {
-            for (int x = base[0]; x < base[0]+extent[0]; x++) {
-                f(x, y);
-            }
-        }
-    }
-};
+ALWAYS_INLINE inline
+__device__ T& dev_pixel(buffer_t &buf, int x, int y) {
+    T *data = (T*)buf.dev;
+    assert(buf.stride[0] == 1);
+    assert(buf.stride[1] > 6300 && buf.stride[1] < 6500);
+    int x_offset = (x - buf.min[0]);
+    int y_offset = (y - buf.min[1]) * buf.stride[1];
+    return data[x_offset + y_offset];
+}
 
 __global__ void
-boxBlur(buf<float> in, buf<float> out) {
-    uint32_t x = blockIdx.x * blockDim.x + threadIdx.x + out.base[0];
-    uint32_t y = blockIdx.y * blockDim.y + threadIdx.y + out.base[1];
+boxBlur(buffer_t in, buffer_t out) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x + out.min[0];
+    int y = blockIdx.y * blockDim.y + threadIdx.y + out.min[1];
 
-    if (x >= out.extent[0] || y >= out.extent[1]) return;
+    if (x < out.min[0] || y < out.min[1] ||
+        x >= out.extent[0] || y >= out.extent[1])
+    {
+        return;
+    }
     
     float res = 0;
     for (int j = -kernel_radius; j <= kernel_radius; j++) {
         for (int i = -kernel_radius; i <= kernel_radius; i++) {
-            // if (x == 100 && y == 100) {
-            //     printf("res += in(%d,%d) = %.2f\n", x+i, y+j, in(x+i, y+j));
-            // }
-            res += in(x+i, y+j);
+            res += dev_pixel<float>(in, x+i, y+j);
+        }
+    }
+    res *= 1.f/kernel_area;
+
+    dev_pixel<float>(out, x,y) = res;
+}
+
+// TODO: restrict on in/out DOUBLES performance!
+// #define _FLOAT(b) (reinterpret_cast<float*>((b).dev))
+#define OUT_PIXEL(x,y) (out[(x)+6400*(y)])
+#define IN_PIXEL(x,y) (in[((x)+kernel_radius)+6400*((y)+kernel_radius)])
+__global__ void
+boxBlurStatic(const float * __restrict__ in, float * __restrict__ out) {
+// boxBlurStatic(const float *in, float *out) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    float res = 0;
+    for (int j = -kernel_radius; j <= kernel_radius; j++) {
+        for (int i = -kernel_radius; i <= kernel_radius; i++) {
+            res += IN_PIXEL(x+i, y+j);
         }
     }
     res /= float(kernel_area);
 
-    out(x,y) = res;
+    OUT_PIXEL(x,y) = res;
+}
+// #undef _FLOAT
+#undef OUT_PIXEL
+#undef IN_PIXEL
 
-    if (x > 8 && y > 8 && x < 16 && y < 16) {
-        printf("(%d,%d) %.2f => %.2f\n", x, y, in(x,y), out(x,y));
-    }
+template <typename T>
+void dev_malloc(Halide::Buffer<T> &buf) {
+    buffer_t *b = buf.raw_buffer();
+    assert(!b->dev);
+    cudaMalloc((void**)(&b->dev), buf.size_in_bytes());
+}
+
+template <typename T>
+void dev_free(Halide::Buffer<T> &buf) {
+    buffer_t *b = buf.raw_buffer();
+    void *dev = (void*)b->dev;
+    assert(dev);
+    cudaFree(dev);
+    b->dev = 0;
+}
+
+template <typename T>
+void dev_to_host(Halide::Buffer<T> &buf) {
+    buffer_t *b = buf.raw_buffer();
+    void *dev = (void*)b->dev;
+    assert(dev);
+    assert(b->host);
+    cudaMemcpy(b->host, dev, buf.size_in_bytes(), cudaMemcpyDeviceToHost);
+}
+
+template <typename T>
+void host_to_dev(Halide::Buffer<T> &buf) {
+    buffer_t *b = buf.raw_buffer();
+    void *dev = (void*)b->dev;
+    assert(dev);
+    assert(b->host);
+    cudaMemcpy(dev, b->host, buf.size_in_bytes(), cudaMemcpyHostToDevice);
 }
 
 int main (int argc, char const *argv[])
 {
-    const int width = 6400,
-              height = 4800;
-    buf<float> in(width+2*kernel_radius, height+2*kernel_radius),
+    int trials = 1;
+    if (argc == 2) {
+        trials = atoi(argv[1]);
+    }
+    Halide::Buffer<float> in(width+2*kernel_radius, height+2*kernel_radius),
                out(width, height);
 
-    in.base[0] = in.base[1] = -kernel_radius;
+    in.set_min(-kernel_radius, -kernel_radius);
 
-    const int block_width = 16,
-              block_height = 16;
+    const int block_width = 32,
+              block_height = 32;
     dim3 blocks((width + block_width - 1) / block_width,
                 (height + block_height - 1) / block_height);
     dim3 threads(block_width, block_height);
 
-    in.for_each([&](int x, int y) {
+    in.for_each_element([&](int x, int y) {
         in(x, y) = (x % 3 == 0 && y % 3 == 0) ? 1.f : 0.f;
     });
-    in.h_to_d();
+    
+    dev_malloc(in);
+    dev_malloc(out);
+    
+    host_to_dev(in);
+    host_to_dev(out);
 
-    boxBlur<<<blocks, threads>>>(in, out);
+    cudaEvent_t startEv, endEv;
+    cudaEventCreate(&startEv);
+    cudaEventCreate(&endEv);
 
-    out.d_to_h();
-    in.for_each([&](int x, int y) {
+    cudaEventRecord(startEv);
+    for (int i = 0; i < trials; i++) {
+        // boxBlur<<<blocks, threads>>>(*in.raw_buffer(), *out.raw_buffer());
+        boxBlurStatic<<<blocks, threads>>>((float*)in.raw_buffer()->dev, (float*)out.raw_buffer()->dev);
+    }
+    cudaEventRecord(endEv);
+
+    dev_to_host(in);
+    dev_to_host(out);
+
+    in.for_each_element([&](int x, int y) {
         if (y > 16) return;
         if (x >= 0 && x < 16) printf("%.2f ", in(x, y));
         if (x == 16) printf("\n");
     });
-	printf("\n");
-    out.for_each([&](int x, int y) {
+    printf("\n");
+    out.for_each_element([&](int x, int y) {
         if (y > 16) return;
         if (x >= 0 && x < 16) printf("%.2f ", out(x, y));
         if (x == 16) printf("\n");
     });
-	
-	in.free();
-	out.free();
 
+    float elapsed;
+    cudaEventElapsedTime(&elapsed, startEv, endEv);
+    printf("\n-------\nTIME: %f ms / %d trials = %f ms\n", elapsed, trials, elapsed/trials);
+    int64_t pixels = width*height;
+    int64_t kernel_pixels = (kernel_radius*2+1)*(kernel_radius*2+1);
+    printf("Inputs accumulated: %ldM\n", pixels*kernel_pixels/1000000);
+    
+    dev_free(in);
+    dev_free(out);
+    
     return 0;
 }
