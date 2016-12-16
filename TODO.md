@@ -1,0 +1,2 @@
+- [ ] Clean up
+- [ ] Run until statistical confidence on benchmark
