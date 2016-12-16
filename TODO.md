@@ -1,2 +1,6 @@
-- [ ] Clean up
+- [ ] Clean up - factor into a standard runnable utility class
+    - Copy needed data to/from device
+    - Marshal arguments
+    - Variadic template for base?
+    - Runner with timers
 - [ ] Run until statistical confidence on benchmark
