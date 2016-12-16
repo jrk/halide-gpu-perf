@@ -17,7 +17,7 @@ test-llvm: test.cu
 	rm $@.tmp
 
 run: test
-	./test 10
+	./test 20
 
 dbg: test
 	gdb ./test
