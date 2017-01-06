@@ -3,3 +3,4 @@ test
 test-llvm
 test*.ptx
 .sync
+unsharp/input.png
