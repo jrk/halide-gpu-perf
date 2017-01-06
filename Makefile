@@ -1,4 +1,4 @@
-HALIDE_ROOT ?= $(HOME)/hl-lin
+HALIDE_ROOT ?= $(HOME)/_hl
 CFLAGS += -DNDEBUG -I$(HALIDE_ROOT)/include -std=c++11 #-restrict
 # LDFLAGS += -L$(HALIDE_ROOT)/lib -lHalideRuntime-host-cuda-debug
 CLANG = $(HOME)/.linuxbrew/opt/llvm/bin/clang++

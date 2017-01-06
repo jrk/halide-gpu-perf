@@ -2,7 +2,7 @@
 // the current directory. Then you should be able to compile this
 // file with:
 //
-// c++ -g -std=c++11 -I ~/hl-mac/include -L ~/hl-mac/bin/ -lHalide `pkg-config libpng --cflags --libs` `pkg-config opencv --cflags --libs` -O3 unsharp-halide.cpp -o unsharp-halide
+// c++ -g -std=c++11 -I ~/_hl/include -L ~/_hl/bin/ -lHalide `libpng-config --cflags --ldflags` `pkg-config opencv --cflags --libs` -O3 unsharp-halide.cpp -o unsharp-halide
 //
 // You'll also need a multi-megapixel png image to run this on. Name
 // it input.png and put it in this directory.
