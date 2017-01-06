@@ -1,64 +1,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <assert.h>
-// #include <HalideRuntimeCuda.h>
-#ifndef __CUDA_ARCH__
-// host
-#include <HalideBuffer.h>
-#else
-// device
-#define HALIDE_ATTRIBUTE_ALIGN(x) __attribute__((aligned(x)))
-typedef struct buffer_t {
-    /** A device-handle for e.g. GPU memory used to back this buffer. */
-    uint8_t* __restrict__ dev;
 
-    /** A pointer to the start of the data in main memory. In terms of
-     * the Halide coordinate system, this is the address of the min
-     * coordinates (defined below). */
-    uint8_t* host;
-
-    /** The size of the buffer in each dimension. */
-    int32_t extent[4];
-
-    /** Gives the spacing in memory between adjacent elements in the
-    * given dimension.  The correct memory address for a load from
-    * this buffer at position x, y, z, w is:
-    * host + elem_size * ((x - min[0]) * stride[0] +
-    *                     (y - min[1]) * stride[1] +
-    *                     (z - min[2]) * stride[2] +
-    *                     (w - min[3]) * stride[3])
-    * By manipulating the strides and extents you can lazily crop,
-    * transpose, and even flip buffers without modifying the data.
-    */
-    int32_t stride[4];
-
-    /** Buffers often represent evaluation of a Func over some
-    * domain. The min field encodes the top left corner of the
-    * domain. */
-    int32_t min[4];
-
-    /** How many bytes does each buffer element take. This may be
-    * replaced with a more general type code in the future. */
-    int32_t elem_size;
-
-    /** This should be true if there is an existing device allocation
-    * mirroring this buffer, and the data has been modified on the
-    * host side. */
-    HALIDE_ATTRIBUTE_ALIGN(1) bool host_dirty;
-
-    /** This should be true if there is an existing device allocation
-    mirroring this buffer, and the data has been modified on the
-    device side. */
-    HALIDE_ATTRIBUTE_ALIGN(1) bool dev_dirty;
-
-    // Some compilers will add extra padding at the end to ensure
-    // the size is a multiple of 8; we'll do that explicitly so that
-    // there is no ambiguity.
-    HALIDE_ATTRIBUTE_ALIGN(1) uint8_t _padding[10 - sizeof(void *)];
-} buffer_t;
-
-#endif
-
+#include "test_buffer.h"
 
 const int kernel_radius = 9;
 const int kernel_area = (kernel_radius*2+1)*(kernel_radius*2+1);
@@ -73,7 +17,7 @@ const int width = 6400,
 
 template <typename T, bool static_addr=false>
 ALWAYS_INLINE inline
-__device__ T& out_pixel(buffer_t buf, int x, int y) {
+__device__ T& write_pixel(buffer_t buf, int x, int y) {
     T *data = (T*)buf.dev;
     int x_min, y_min, x_stride, y_stride;
     if (static_addr) {
@@ -96,7 +40,7 @@ __device__ T& out_pixel(buffer_t buf, int x, int y) {
 
 template <typename T, bool static_addr=false>
 ALWAYS_INLINE inline
-const __device__ T in_pixel(const buffer_t buf, int x, int y) {
+const __device__ T read_pixel(const buffer_t buf, int x, int y) {
     const T *data = (const T*)buf.dev;
     int x_min, y_min, x_stride, y_stride;
     if (static_addr) {
@@ -133,12 +77,12 @@ boxBlurBuf(const buffer_t in, buffer_t out) {
     float res = 0;
     for (int j = -kernel_radius; j <= kernel_radius; j++) {
         for (int i = -kernel_radius; i <= kernel_radius; i++) {
-            res += in_pixel<float>(in, x+i, y+j);
+            res += read_pixel<float>(in, x+i, y+j);
         }
     }
     res /= float(kernel_area);
 
-    out_pixel<float>(out, x,y) = res;
+    write_pixel<float>(out, x,y) = res;
 }
 
 __global__ void
@@ -149,12 +93,12 @@ boxBlurBufStatic(const buffer_t in, buffer_t out) {
     float res = 0;
     for (int j = -kernel_radius; j <= kernel_radius; j++) {
         for (int i = -kernel_radius; i <= kernel_radius; i++) {
-            res += in_pixel<float,true>(in, x+i, y+j);
+            res += read_pixel<float,true>(in, x+i, y+j);
         }
     }
     res /= kernel_area;
 
-    out_pixel<float,true>(out, x,y) = res;
+    write_pixel<float,true>(out, x,y) = res;
 }
 
 // TODO: restrict on in/out DOUBLES performance!
@@ -196,39 +140,6 @@ boxBlurStaticNonRestrict(const float *in, float *out) {
 #undef IN_PIXEL
 
 #ifndef __CUDA_ARCH__
-template <typename T>
-void dev_malloc(Halide::Buffer<T> &buf) {
-    buffer_t *b = buf.raw_buffer();
-    assert(!b->dev);
-    cudaMalloc((void**)(&b->dev), buf.size_in_bytes());
-}
-
-template <typename T>
-void dev_free(Halide::Buffer<T> &buf) {
-    buffer_t *b = buf.raw_buffer();
-    void *dev = (void*)b->dev;
-    assert(dev);
-    cudaFree(dev);
-    b->dev = 0;
-}
-
-template <typename T>
-void dev_to_host(Halide::Buffer<T> &buf) {
-    buffer_t *b = buf.raw_buffer();
-    void *dev = (void*)b->dev;
-    assert(dev);
-    assert(b->host);
-    cudaMemcpy(b->host, dev, buf.size_in_bytes(), cudaMemcpyDeviceToHost);
-}
-
-template <typename T>
-void host_to_dev(Halide::Buffer<T> &buf) {
-    buffer_t *b = buf.raw_buffer();
-    void *dev = (void*)b->dev;
-    assert(dev);
-    assert(b->host);
-    cudaMemcpy(dev, b->host, buf.size_in_bytes(), cudaMemcpyHostToDevice);
-}
 
 const int block_width = 32,
           block_height = 32;
@@ -260,7 +171,7 @@ int main (int argc, char const *argv[])
     if (argc == 2) {
         trials = atoi(argv[1]);
     }
-    Halide::Buffer<float> in(width+2*kernel_radius, height+2*kernel_radius),
+    Buffer<float> in(width+2*kernel_radius, height+2*kernel_radius),
                out(width, height);
 
     in.set_min(-kernel_radius, -kernel_radius);
