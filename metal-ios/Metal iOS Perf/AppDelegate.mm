@@ -7,6 +7,7 @@
 //
 
 #import "AppDelegate.h"
+#import "ViewController.h"
 
 #include "HalideRuntime.h"
 #include "HalideRuntimeMetal.h"
@@ -38,6 +39,7 @@ static const int test_iterations = 100;
     
     double lastFrameTime;
     double frameElapsedEstimate;
+    double msPerIter;
 }
 
 - (void)runBench {
@@ -54,15 +56,26 @@ static const int test_iterations = 100;
     id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
     
     [commandBuffer addCompletedHandler: ^(id<MTLCommandBuffer>) {
-        float elapsed = CACurrentMediaTime() - startTime;
-        NSLog(@"Completed after %f\n"
-               "%f ms/iteration",
-              elapsed, 1000*elapsed/test_iterations);
+        lastFrameTime = CACurrentMediaTime() - startTime;
+        msPerIter = 1000*lastFrameTime/test_iterations;
+        [self logPerf];
         [self dispatchNextBench]; // repeat...
     }];
     [commandBuffer enqueue];
     [commandBuffer commit];
     [_commandQueue insertDebugCaptureBoundary];
+}
+
+- (void)logPerf {
+    NSLog(@"Completed after %f\n"
+          "%f ms/iteration",
+          lastFrameTime, msPerIter);
+
+    // UI updates have to happen on the main thread
+    dispatch_async(dispatch_get_main_queue(), ^(void) {
+        ViewController *vc = (ViewController*)self.window.rootViewController;
+        [vc setRuntime:msPerIter];
+    });
 }
 
 - (void)dispatchNextBench {
@@ -107,6 +120,12 @@ static const int test_iterations = 100;
     iteration = 0;
     lastFrameTime = -1;
     frameElapsedEstimate = -1;
+    
+    dispatch_async(dispatch_get_main_queue(), ^(void) {
+        ViewController *vc = (ViewController*)self.window.rootViewController;
+        [vc setApp:@"Reaction Diffusion"];
+        [vc setRuntime:-1.0f];
+    });
     
     // Start the bench loop on the global "interactive" GCD queue
     [self dispatchNextBench];

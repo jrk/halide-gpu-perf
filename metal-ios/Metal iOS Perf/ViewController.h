@@ -8,6 +8,12 @@
 
 #import <UIKit/UIKit.h>
 
-@interface ViewController : UIViewController
+@interface ViewController : UIViewController {
+    IBOutlet UILabel *appLabel;
+    IBOutlet UILabel *runtimeLabel;
+}
+
+-(void)setApp:(NSString*)app;
+-(void)setRuntime:(float)ms;
 
 @end

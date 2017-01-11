@@ -25,5 +25,12 @@
     // Dispose of any resources that can be recreated.
 }
 
+-(void)setApp:(NSString*)app {
+    [appLabel setText:app];
+}
+
+-(void)setRuntime:(float)ms {
+    [runtimeLabel setText:[NSString stringWithFormat:@"%.1f ms", ms]];
+}
 
 @end
