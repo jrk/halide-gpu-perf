@@ -4,3 +4,12 @@ test-llvm
 test*.ptx
 .sync
 unsharp/input.png
+metal-ios/.DS_Store
+metal-ios/Metal iOS Perf/reaction_diffusion_2_init.h
+metal-ios/Metal iOS Perf/reaction_diffusion_2_init.o
+metal-ios/Metal iOS Perf/reaction_diffusion_2_render.h
+metal-ios/Metal iOS Perf/reaction_diffusion_2_render.o
+metal-ios/Metal iOS Perf/reaction_diffusion_2_update.h
+metal-ios/Metal iOS Perf/reaction_diffusion_2_update.o
+metal-ios/reaction_diffusion_2_generator
+*.xcuserdatad
