@@ -10,10 +10,11 @@
 
 @interface ViewController : UIViewController {
     IBOutlet UILabel *appLabel;
-    IBOutlet UILabel *runtimeLabel;
+    IBOutlet UILabel *metalRuntimeLabel;
+    IBOutlet UILabel *cpuRuntimeLabel;
 }
 
 -(void)setApp:(NSString*)app;
--(void)setRuntime:(float)ms;
+-(void)setRuntime:(float)ms forMetal:(BOOL)metal;
 
 @end

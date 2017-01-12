@@ -29,8 +29,8 @@
     [appLabel setText:app];
 }
 
--(void)setRuntime:(float)ms {
-    [runtimeLabel setText:[NSString stringWithFormat:@"%.1f ms", ms]];
+-(void)setRuntime:(float)ms forMetal:(BOOL)metal {
+    [(metal ? metalRuntimeLabel : cpuRuntimeLabel) setText:[NSString stringWithFormat:@"%.1f ms", ms]];
 }
 
 @end

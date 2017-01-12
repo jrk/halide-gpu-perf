@@ -12,9 +12,12 @@
 #include "HalideRuntime.h"
 #include "HalideRuntimeMetal.h"
 
-#include "reaction_diffusion_2_init.h"
-#include "reaction_diffusion_2_render.h"
-#include "reaction_diffusion_2_update.h"
+#include "reaction_diffusion_init_metal.h"
+#include "reaction_diffusion_render_metal.h"
+#include "reaction_diffusion_update_metal.h"
+#include "reaction_diffusion_init_arm.h"
+#include "reaction_diffusion_render_arm.h"
+#include "reaction_diffusion_update_arm.h"
 
 #include <algorithm>
 
@@ -29,9 +32,10 @@ static const int test_iterations = 100;
 @implementation AppDelegate
 {
 @private
-    struct buffer_t buf1;
-    struct buffer_t buf2;
-    struct buffer_t pixel_buf;
+    // TODO: put all this inside a struct def, with one for each target tested
+    struct buffer_t buf1, buf1_cpu;
+    struct buffer_t buf2, buf2_cpu;
+    struct buffer_t pixel_buf, pixel_buf_cpu;
     
     int32_t iteration;
     
@@ -42,45 +46,54 @@ static const int test_iterations = 100;
     double msPerIter;
 }
 
-- (void)runBench {
+- (void)runBench:(BOOL)metal {
     
     float startTime = CACurrentMediaTime();
     for (int i = 0; i < test_iterations; i++) {
         float tx = -100, ty = -100; // arbitrary
-        reaction_diffusion_2_update((__bridge void *)self, &buf1, tx, ty, cx, cy, iteration++, &buf2);
-        reaction_diffusion_2_render((__bridge void *)self, &buf2, &pixel_buf);
+        if (metal) {
+            reaction_diffusion_update_metal((__bridge void *)self, &buf1, tx, ty, cx, cy, iteration++, &buf2);
+            reaction_diffusion_render_metal((__bridge void *)self, &buf2, &pixel_buf);
+        } else {
+            reaction_diffusion_update_arm((__bridge void *)self, &buf1_cpu, tx, ty, cx, cy, iteration++, &buf2_cpu);
+            reaction_diffusion_render_arm((__bridge void *)self, &buf2_cpu, &pixel_buf_cpu);
+        }
         
         std::swap(buf1, buf2);
     }
     
-    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
-    
-    [commandBuffer addCompletedHandler: ^(id<MTLCommandBuffer>) {
+    auto complete = ^(void) {
         lastFrameTime = CACurrentMediaTime() - startTime;
         msPerIter = 1000*lastFrameTime/test_iterations;
-        [self logPerf];
+        [self logPerf:metal];
         [self dispatchNextBench]; // repeat...
-    }];
+    };
+
+    // HACK: CPU tasks also enqueue on the Metal command queue, for serialization of tests
+    id<MTLCommandBuffer> commandBuffer = [_commandQueue commandBuffer];
+    
+    [commandBuffer addCompletedHandler: ^(id<MTLCommandBuffer>) { complete(); }];
     [commandBuffer enqueue];
     [commandBuffer commit];
     [_commandQueue insertDebugCaptureBoundary];
 }
 
-- (void)logPerf {
-    NSLog(@"Completed after %f\n"
+- (void)logPerf:(BOOL)metal {
+    NSLog(@"%s: Completed after %f\n"
           "%f ms/iteration",
-          lastFrameTime, msPerIter);
+          metal ? "METAL" : "CPU", lastFrameTime, msPerIter);
 
     // UI updates have to happen on the main thread
     dispatch_async(dispatch_get_main_queue(), ^(void) {
         ViewController *vc = (ViewController*)self.window.rootViewController;
-        [vc setRuntime:msPerIter];
+        [vc setRuntime:msPerIter forMetal:metal];
     });
 }
 
 - (void)dispatchNextBench {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^(void) {
-        [self runBench];
+        [self runBench:true];
+        [self runBench:false];
     });
 }
 
@@ -89,33 +102,60 @@ static const int test_iterations = 100;
     _device = MTLCreateSystemDefaultDevice();
     _commandQueue = [_device newCommandQueue];
     
-    buf1 = {0};
-    buf1.extent[0] = test_width;
-    buf1.extent[1] = test_height;
-    buf1.extent[2] = 3;
-    buf1.stride[0] = 3;
-    buf1.stride[1] = buf1.extent[0] * buf1.stride[0];
-    buf1.stride[2] = 1;
-    buf1.elem_size = sizeof(float);
-    
-    cx = test_width / 2.0;
-    cy = test_height / 2.0;
-    
-    buf2 = buf1;
-    buf1.host = (uint8_t *)malloc(4 * 3 * buf1.extent[0] * buf1.extent[1]);
-    buf2.host = (uint8_t *)malloc(4 * 3 * buf2.extent[0] * buf2.extent[1]);
-    // Destination buf must have rows a multiple of 64 bytes for Metal's copyFromBuffer method.
-    pixel_buf = {0};
-    pixel_buf.extent[0] = buf1.extent[0];
-    pixel_buf.extent[1] = buf1.extent[1];
-    pixel_buf.stride[0] = 1;
-    pixel_buf.stride[1] = (pixel_buf.extent[1] + 63) & ~63;
-    pixel_buf.elem_size = sizeof(uint32_t);
-    pixel_buf.host = (uint8_t *)malloc(4 * pixel_buf.stride[1] * pixel_buf.extent[1]);
-    
-    NSLog(@"Calling reaction_diffusion_2_init size (%u x %u)", buf1.extent[0], buf1.extent[1]);
-    reaction_diffusion_2_init((__bridge void *)self, cx, cy, &buf1);
-    NSLog(@"Returned from reaction_diffusion_2_init");
+    {
+        buf1 = {0};
+        buf1.extent[0] = test_width;
+        buf1.extent[1] = test_height;
+        buf1.extent[2] = 3;
+        buf1.stride[0] = 3;
+        buf1.stride[1] = buf1.extent[0] * buf1.stride[0];
+        buf1.stride[2] = 1;
+        buf1.elem_size = sizeof(float);
+        
+        cx = test_width / 2.0;
+        cy = test_height / 2.0;
+        
+        buf2 = buf1;
+        buf1.host = (uint8_t *)malloc(4 * 3 * buf1.extent[0] * buf1.extent[1]);
+        buf2.host = (uint8_t *)malloc(4 * 3 * buf2.extent[0] * buf2.extent[1]);
+        // Destination buf must have rows a multiple of 64 bytes for Metal's copyFromBuffer method.
+        pixel_buf = {0};
+        pixel_buf.extent[0] = buf1.extent[0];
+        pixel_buf.extent[1] = buf1.extent[1];
+        pixel_buf.stride[0] = 1;
+        pixel_buf.stride[1] = (pixel_buf.extent[1] + 63) & ~63;
+        pixel_buf.elem_size = sizeof(uint32_t);
+        pixel_buf.host = (uint8_t *)malloc(4 * pixel_buf.stride[1] * pixel_buf.extent[1]);
+        
+        NSLog(@"Calling reaction_diffusion_init_metal size (%u x %u)", buf1.extent[0], buf1.extent[1]);
+        reaction_diffusion_init_metal((__bridge void *)self, cx, cy, &buf1);
+        NSLog(@"Returned from reaction_diffusion_init_metal");
+    }
+
+    {
+        int image_width = test_width,
+            image_height = test_height;
+        buf1_cpu = {0};
+        buf1_cpu.extent[0] = image_width;
+        buf1_cpu.extent[1] = image_height;
+        buf1_cpu.extent[2] = 3;
+        buf1_cpu.stride[0] = 1;
+        buf1_cpu.stride[1] = image_width;
+        buf1_cpu.stride[2] = image_width * image_height;
+        buf1_cpu.elem_size = 4;
+        
+        uint32_t *pixels = (uint32_t *)malloc(4*image_width*image_height);
+
+        buf2_cpu = buf1_cpu, pixel_buf_cpu = buf1_cpu;
+        buf1_cpu.host = (uint8_t *)malloc(4 * 3 * image_width * image_height);
+        buf2_cpu.host = (uint8_t *)malloc(4 * 3 * image_width * image_height);
+        pixel_buf_cpu.extent[2] = pixel_buf_cpu.stride[2] = 0;
+        pixel_buf_cpu.host = (uint8_t *)pixels;
+
+        NSLog(@"Calling reaction_diffusion_init_arm size (%u x %u)", buf1_cpu.extent[0], buf1_cpu.extent[1]);
+        reaction_diffusion_init_arm((__bridge void *)self, cx, cy, &buf1_cpu);
+        NSLog(@"Returned from reaction_diffusion_init_arm");
+    }
     
     iteration = 0;
     lastFrameTime = -1;
@@ -124,7 +164,8 @@ static const int test_iterations = 100;
     dispatch_async(dispatch_get_main_queue(), ^(void) {
         ViewController *vc = (ViewController*)self.window.rootViewController;
         [vc setApp:@"Reaction Diffusion"];
-        [vc setRuntime:-1.0f];
+        [vc setRuntime:-1.0f forMetal:true];
+        [vc setRuntime:-1.0f forMetal:false];
     });
     
     // Start the bench loop on the global "interactive" GCD queue

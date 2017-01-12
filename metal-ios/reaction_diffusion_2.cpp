@@ -1,13 +1,13 @@
 #include "Halide.h"
 using namespace Halide;
 
+namespace {
 Var x("x"), y("y"), c("c"), xi("xi"), yi("yi");
 
-int main(int argc, char **argv) {
-
-    // First define the function that gives the initial state.
-    {
-        Param<float> cx, cy;
+class ReactionDiffusionInit : public Halide::Generator<ReactionDiffusionInit> {
+public:
+    Param<float> cx{"cx"}, cy{"cy"};
+    Func build() {
         Func initial("initial");
 
         // The initial state is a quantity of three chemicals present
@@ -17,19 +17,24 @@ int main(int argc, char **argv) {
         Expr r = dx * dx + dy * dy;
         Expr mask = r < 200 * 200;
         initial(x, y, c) = random_float();// * select(mask, 1.0f, 0.001f);
-        initial.reorder(c, x, y).bound(c, 0, 3).vectorize(c).gpu_tile(x, y, xi, yi, 4, 4);
-        initial.output_buffer().dim(2).set_bounds(0, 3);
-        initial.output_buffer().dim(0).set_stride(3);
-        initial.output_buffer().dim(2).set_stride(1);
-        initial.compile_to_file("reaction_diffusion_2_init", {cx, cy}, "reaction_diffusion_2_init");
+        if (get_target().has_gpu_feature()) {
+            initial.reorder(c, x, y).bound(c, 0, 3).vectorize(c).gpu_tile(x, y, xi, yi, 4, 4);
+            initial.output_buffer().dim(2).set_bounds(0, 3);
+            initial.output_buffer().dim(0).set_stride(3);
+            initial.output_buffer().dim(2).set_stride(1);
+        }
+        return initial;
     }
+};
 
-    // Then the function that updates the state. Also depends on user input.
-    {
-        ImageParam state(Float(32), 3, "state");
-        Param<int> mouse_x, mouse_y;
-        Param<float> cx, cy;
-        Param<int> frame;
+class ReactionDiffusionUpdate : public Halide::Generator<ReactionDiffusionUpdate> {
+public:
+    ImageParam state{Float(32), 3, "state"};
+    Param<int> mouse_x{"mouse_x"}, mouse_y{"mouse_y"};
+    Param<float> cx{"cx"}, cy{"cy"};
+    Param<int> frame{"frame"};
+    Func build() {
+        // Then the function that updates the state. Also depends on user input.
 
         Func clamped = BoundaryConditions::repeat_edge(state);
         state.dim(2).set_bounds(0, 3);
@@ -97,43 +102,55 @@ int main(int argc, char **argv) {
         Expr dy = clobber.y - mouse_y;
         Expr radius = dx * dx + dy * dy;
         new_state(clobber.x, clobber.y, c) = select(radius < 400.0f, 1.0f, new_state(clobber.x, clobber.y, c));
+        
+        if (get_target().has_gpu_feature()) {
+            new_state.reorder(c, x, y).bound(c, 0, 3).unroll(c);
+            blur.reorder(c, x, y).vectorize(c);
+            blur.compute_at(new_state, xi);
+            new_state.gpu_tile(x, y, xi, yi, 8, 2);
+            new_state.update(0).reorder(c, x).unroll(c);
+            new_state.update(1).reorder(c, x).unroll(c);
+            new_state.update(2).reorder(c, y).unroll(c);
+            new_state.update(3).reorder(c, y).unroll(c);
+            new_state.update(4).reorder(c, clobber.x).unroll(c);
 
-        new_state.reorder(c, x, y).bound(c, 0, 3).unroll(c);
-        blur.reorder(c, x, y).vectorize(c);
-        blur.compute_at(new_state, xi);
-        new_state.gpu_tile(x, y, xi, yi, 8, 2);
-        new_state.update(0).reorder(c, x).unroll(c);
-        new_state.update(1).reorder(c, x).unroll(c);
-        new_state.update(2).reorder(c, y).unroll(c);
-        new_state.update(3).reorder(c, y).unroll(c);
-        new_state.update(4).reorder(c, clobber.x).unroll(c);
+            new_state.update(0).gpu_tile(x, xi, 8);
+            new_state.update(1).gpu_tile(x, xi, 8);
+            new_state.update(2).gpu_tile(y, yi, 8);
+            new_state.update(3).gpu_tile(y, yi, 8);
+            RVar clobber_xi("clobber_xi"), clobber_yi("clobber_yi");
+            new_state.update(4).gpu_tile(clobber.x, clobber.y, clobber_xi, clobber_yi, 1, 1);
 
-        new_state.update(0).gpu_tile(x, xi, 8);
-        new_state.update(1).gpu_tile(x, xi, 8);
-        new_state.update(2).gpu_tile(y, yi, 8);
-        new_state.update(3).gpu_tile(y, yi, 8);
-        RVar clobber_xi("clobber_xi"), clobber_yi("clobber_yi");
-        new_state.update(4).gpu_tile(clobber.x, clobber.y, clobber_xi, clobber_yi, 1, 1);
+            state.dim(0).set_stride(3);
+            state.dim(2).set_stride(1);
+            state.dim(2).set_extent(3);
+            new_state.output_buffer().dim(2).set_extent(3);
+            new_state.output_buffer().dim(0).set_stride(3);
+            new_state.output_buffer().dim(2).set_stride(1);
+        } else {
+            new_state.reorder(c, x, y).bound(c, 0, 3).unroll(c);
 
-        std::vector<Argument> args(6);
-        args[0] = state;
-        args[1] = mouse_x;
-        args[2] = mouse_y;
-        args[3] = cx;
-        args[4] = cy;
-        args[5] = frame;
-        state.dim(0).set_stride(3);
-        state.dim(2).set_stride(1);
-        state.dim(2).set_extent(3);
-        new_state.output_buffer().dim(2).set_extent(3);
-        new_state.output_buffer().dim(0).set_stride(3);
-        new_state.output_buffer().dim(2).set_stride(1);
-        new_state.compile_to_file("reaction_diffusion_2_update", args, "reaction_diffusion_2_update");
+            Var yi;
+            new_state.split(y, y, yi, 64).parallel(y);
+
+            //blur_x.store_at(new_state, y).compute_at(new_state, yi);
+            blur.compute_at(new_state, yi);
+            clamped.store_at(new_state, y).compute_at(new_state, yi);
+
+            new_state.vectorize(x, 4);
+            blur.vectorize(x, 4);
+            state.dim(2).set_bounds(0, 3);
+        }
+        return new_state;
     }
+};
 
-    // Now the function that converts the state into an bgra8 image.
-    {
-        ImageParam state(Float(32), 3, "state");
+class ReactionDiffusionRender : public Halide::Generator<ReactionDiffusionRender> {
+public:
+    ImageParam state{Float(32), 3, "state"};
+
+    Func build() {
+        // Now the function that converts the state into an bgra8 image.
 
         Func contour;
         contour(x, y, c) = pow(state(x, y, c) * (1 - state(x, y, c)) * 4, 8);
@@ -152,13 +169,22 @@ int main(int argc, char **argv) {
         Func render("render");
         render(x, y) = alpha + red + green + blue;
 
-        state.dim(2).set_bounds(0, 3);
-        state.dim(2).set_stride(1);
-        state.dim(0).set_stride(3);
-        render.gpu_tile(x, y, xi, yi, 32, 4);
-
-        render.compile_to_file("reaction_diffusion_2_render", {state}, "reaction_diffusion_2_render");
+        if (get_target().has_gpu_feature()) {
+            state.dim(2).set_bounds(0, 3);
+            state.dim(2).set_stride(1);
+            state.dim(0).set_stride(3);
+            render.gpu_tile(x, y, xi, yi, 32, 4);
+        } else {
+            render.vectorize(x, 4);
+            Var yi;
+            render.split(y, y, yi, 64).parallel(y);
+        }
+        return render;
     }
+};
 
-    return 0;
-}
+Halide::RegisterGenerator<ReactionDiffusionInit> register_init{"reaction_diffusion_init"};
+Halide::RegisterGenerator<ReactionDiffusionUpdate> register_update{"reaction_diffusion_update"};
+Halide::RegisterGenerator<ReactionDiffusionRender> register_render{"reaction_diffusion_render"};
+
+} // namespace

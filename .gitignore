@@ -5,11 +5,19 @@ test*.ptx
 .sync
 unsharp/input.png
 metal-ios/.DS_Store
-metal-ios/Metal iOS Perf/reaction_diffusion_2_init.h
-metal-ios/Metal iOS Perf/reaction_diffusion_2_init.o
-metal-ios/Metal iOS Perf/reaction_diffusion_2_render.h
-metal-ios/Metal iOS Perf/reaction_diffusion_2_render.o
-metal-ios/Metal iOS Perf/reaction_diffusion_2_update.h
-metal-ios/Metal iOS Perf/reaction_diffusion_2_update.o
+metal-ios/Metal iOS Perf/reaction_diffusion_*.h
+metal-ios/Metal iOS Perf/reaction_diffusion_*.o
 metal-ios/reaction_diffusion_2_generator
 *.xcuserdatad
+metal-ios/Metal iOS Perf/reaction_diffusion_init_arm.h
+metal-ios/Metal iOS Perf/reaction_diffusion_init_arm.o
+metal-ios/Metal iOS Perf/reaction_diffusion_init_metal.h
+metal-ios/Metal iOS Perf/reaction_diffusion_init_metal.o
+metal-ios/Metal iOS Perf/reaction_diffusion_render_arm.h
+metal-ios/Metal iOS Perf/reaction_diffusion_render_arm.o
+metal-ios/Metal iOS Perf/reaction_diffusion_render_metal.h
+metal-ios/Metal iOS Perf/reaction_diffusion_render_metal.o
+metal-ios/Metal iOS Perf/reaction_diffusion_update_arm.h
+metal-ios/Metal iOS Perf/reaction_diffusion_update_arm.o
+metal-ios/Metal iOS Perf/reaction_diffusion_update_metal.h
+metal-ios/Metal iOS Perf/reaction_diffusion_update_metal.o
