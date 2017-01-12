@@ -66,7 +66,7 @@ static const int test_iterations = 100;
         lastFrameTime = CACurrentMediaTime() - startTime;
         msPerIter = 1000*lastFrameTime/test_iterations;
         [self logPerf:metal];
-        [self dispatchNextBench]; // repeat...
+        [self dispatchNextBench:metal]; // repeat...
     };
 
     // HACK: CPU tasks also enqueue on the Metal command queue, for serialization of tests
@@ -90,11 +90,14 @@ static const int test_iterations = 100;
     });
 }
 
-- (void)dispatchNextBench {
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^(void) {
-        [self runBench:true];
-        [self runBench:false];
-    });
+- (void)dispatchNextBench:(BOOL)metal {
+    
+    //dispatch_async(
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1000000000),
+                   dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
+                    ^(void) {
+                        [self runBench:!metal];
+                    });
 }
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
@@ -169,7 +172,7 @@ static const int test_iterations = 100;
     });
     
     // Start the bench loop on the global "interactive" GCD queue
-    [self dispatchNextBench];
+    [self dispatchNextBench:false];
     
     return YES;
 }
